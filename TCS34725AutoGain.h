@@ -171,10 +171,7 @@ public:
 
     void interrupt(bool b)
     {
-        uint8_t r = read8(Reg::ENABLE);
-        if (b) r |=  (uint8_t)Mask::ENABLE_AIEN;
-        else   r &= ~(uint8_t)Mask::ENABLE_AIEN;
-        write8(Reg::ENABLE, r);
+        enable(Mask::ENABLE_AIEN, b);
     }
 
     void clearInterrupt()
@@ -184,12 +181,37 @@ public:
         wire->endTransmission();
     }
 
-    void write8(Reg reg, uint8_t value)
+    uint8_t enable() {
+        return read8(Reg::ENABLE);
+    }
+
+    uint8_t enable(Mask mask, bool value) {
+        uint8_t val = read8(Reg::ENABLE);
+        if (value) {
+            val |= (uint8_t) mask;
+        } else {
+            val &= ~ (uint8_t) mask;
+        }
+        write8(Reg::ENABLE, val);
+        return val;
+    }
+
+    void write8(uint8_t reg, uint8_t value)
     {
         wire->beginTransmission(I2C_ADDR);
-        wire->write(COMMAND_BIT | (uint8_t)reg);
+        wire->write(COMMAND_BIT | reg);
         wire->write(value);
         wire->endTransmission();
+    }
+
+    void write8(Reg reg, uint8_t value) {
+        write8((uint8_t) reg, value);
+    }
+
+    void write16(uint8_t lowerReg, uint16_t value)
+    {
+        write8(lowerReg, (uint8_t) value);
+        write8(lowerReg + 1, value >> 8);
     }
 
     uint8_t read8(Reg reg)
