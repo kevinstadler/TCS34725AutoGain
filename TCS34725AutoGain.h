@@ -57,6 +57,13 @@ public:
         STATUS_AVALID = 0x01
     };
 
+    enum class Mode : uint8_t {
+        Sleep,    // !PON: in sleep state
+        Idle,     //  PON & !AEN: in idle state
+        RGBC,     //  PON &  AEN & !WEN: repeatedly taking RGBC measurements
+        RGBCWait  //  PON &  AEN &  WEN: taking RGBC measurements with waits in between
+    };
+
     enum class Gain : uint8_t { X01, X04, X16, X60 };
 
     struct Color { float r, g, b; };
@@ -103,7 +110,7 @@ public:
     }
 
     Mode mode() {
-        uint8_t v = read8(Reg::ENABLE);
+        uint8_t v = enable();
         if (!(v & Mask::ENABLE_PON)) {
             return Mode::Sleep;
         } else if (!(v & Mask::ENABLE_AEN)) {
