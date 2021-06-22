@@ -73,14 +73,14 @@ public:
     };
 
 
-    bool attach(WireType& w = Wire)
+    bool attach(WireType& w = Wire, bool pon = true, bool aien = true)
     {
         wire = &w;
         uint8_t x = read8(Reg::ID);
         if (x != ID_REG_PART_NUMBER) return false;
 
-        power(true);
-        interrupt(true);   // use to detect availability (available())
+        power(pon);
+        interrupt(aien);   // use to detect availability (available())
         persistence(0x00); // every RGBC cycle generates an interrupt
 
         return true;
