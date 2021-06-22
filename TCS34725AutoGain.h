@@ -88,32 +88,60 @@ public:
 
     void power(bool b)
     {
+        enable(Mask::ENABLE_PON, b);
+    }
+
+    void power(bool b, bool rgbc)
+    {
+        enable(Mask::ENABLE_PON, b);
         if (b)
         {
-            write8(Reg::ENABLE, (uint8_t)Mask::ENABLE_PON);
+            // TODO does this actually stop us from turning everything on at once?
             delay(3); // 2.4 ms must pass after PON is asserted before an RGBC can be initiated
-            write8(Reg::ENABLE, (uint8_t)Mask::ENABLE_PON | (uint8_t)Mask::ENABLE_AEN);
+            enable(Mask::ENABLE_AEN, rgbc);
         }
-        else
-        {
-            uint8_t val = read8(Reg::ENABLE);
-            write8(Reg::ENABLE, val & ~((uint8_t)Mask::ENABLE_PON | (uint8_t)Mask::ENABLE_AEN));
+    }
+
+    Mode mode() {
+        uint8_t v = read8(Reg::ENABLE);
+        if (!(v & Mask::ENABLE_PON)) {
+            return Mode::Sleep;
+        } else if (!(v & Mask::ENABLE_AEN)) {
+            return Mode::Idle;
+        } else if (v & Mask::ENABLE_WEN) {
+            return Mode::RGBCWait;
+        } else {
+            return Mode::RGBC;
         }
     }
 
     void enableColorTempAndLuxCalculation(bool b) { b_ct_lux_calc = b; }
 
-    void integrationTime(float ms) // 2.4 - 614.4 ms
-    {
-        if (ms < INTEGRATION_TIME_MS_MIN) ms = INTEGRATION_TIME_MS_MIN;
-        if (ms > INTEGRATION_TIME_MS_MAX) ms = INTEGRATION_TIME_MS_MAX;
-        uint8_t data = (uint8_t)(256.f - ms / INTEGRATION_TIME_MS_MIN);
-        write8(Reg::ATIME, data);
-        atime = data;
-        integration_time = ms;
+    int16_t integrationCycles() {
+        return 256 - read8(Reg::ATIME);
     }
 
-    void gain(Gain g)
+    int16_t integrationCycles(int16_t nCycles) {// 1 - 256
+        atime = cyclesToValue(nCycles);
+        write8(Reg::ATIME, atime);
+        integration_time = (256 - atime) * INTEGRATION_TIME_MS_MIN;
+        return 256 - atime;
+    }
+
+    float integrationTime() {
+        return INTEGRATION_TIME_MS_MIN * integrationCycles();
+    }
+
+    float integrationTime(float ms) // 2.4 - 614.4 ms
+    {
+        return INTEGRATION_TIME_MS_MIN * integrationCycles(ms / INTEGRATION_TIME_MS_MIN);
+    }
+
+    float gain() {
+        return gain_value;
+    }
+
+    float gain(Gain g)
     {
         write8(Reg::CONTROL, (uint8_t)g);
         switch (g)
@@ -124,6 +152,7 @@ public:
             case Gain::X60: gain_value = 60.f; break;
             default:        gain_value =  1.f; break;
         }
+        return gain();
     }
 
     void scale(float s) { scaling = s; }
@@ -179,6 +208,30 @@ public:
         wire->beginTransmission(I2C_ADDR);
         wire->write(COMMAND_BIT | 0x66);
         wire->endTransmission();
+    }
+
+    static uint8_t cyclesToValue(int16_t nCycles) {
+        // 1 -> 0xFF ... 256 -> 0x00
+        return max(0, min(255, 256 - nCycles));
+    }
+
+    float wait() {
+        uint8_t wlong = read8(Reg::CONFIG) & 0x02;
+        uint8_t nCycles = 256 - read8(Reg::WTIME);
+        return nCycles * (wlong ? 28.8 : 2.4);
+    }
+
+    float wait(float ms) { /* between 2.4ms and 256*28.8 = 7372.8ms */
+        bool wlong = ms > 614.4;
+        int16_t waitCycles = ms / ( wlong ? 28.8 : 2.4 );
+        if (waitCycles <= 0) {
+            enable(Mask::ENABLE_WEN, false);
+            return 0;
+        }
+        enable(Mask::ENABLE_WEN, true);
+        write8(Reg::CONFIG, wlong ? 0x02 : 0x00);
+        write8(Reg::WTIME, cyclesToValue(waitCycles));
+        return wait();
     }
 
     uint8_t enable() {
