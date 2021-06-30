@@ -58,6 +58,7 @@ public:
     };
 
     enum class Mode : uint8_t {
+        Undefined,  // error state
         Sleep,    // !PON: in sleep state
         Idle,     //  PON & !AEN: in idle state
         RGBC,     //  PON &  AEN & !WEN: repeatedly taking RGBC measurements
@@ -109,30 +110,53 @@ public:
         }
     }
 
-    Mode mode() {
-        uint8_t v = enable();
-        if (!(v & Mask::ENABLE_PON)) {
+    static Mode getMode(uint8_t v) {
+        if (!(v & (uint8_t) Mask::ENABLE_PON)) {
             return Mode::Sleep;
-        } else if (!(v & Mask::ENABLE_AEN)) {
+        } else if (!(v & (uint8_t) Mask::ENABLE_AEN)) {
             return Mode::Idle;
-        } else if (v & Mask::ENABLE_WEN) {
+        } else if (v & (uint8_t) Mask::ENABLE_WEN) {
             return Mode::RGBCWait;
         } else {
             return Mode::RGBC;
         }
     }
 
+    Mode mode() {
+        return getMode(enable());
+    }
+
+    Mode mode(Mode m) {
+        uint8_t v = enable();
+        if (m == Mode::Sleep) {
+            v &= ~ (uint8_t) Mask::ENABLE_PON;
+        } else {
+            v |= (uint8_t) Mask::ENABLE_PON;
+            if (m == Mode::Idle) {
+                v &= ~ (uint8_t) Mask::ENABLE_AEN;
+            } else {
+                v |= (uint8_t) Mask::ENABLE_AEN;
+                if (m == Mode::RGBCWait) {
+                    v |= (uint8_t) Mask::ENABLE_WEN;
+                } else {
+                    v &= ~ (uint8_t) Mask::ENABLE_WEN;
+                }
+            }
+        }
+        return getMode(enable(v));
+    }
+
     void enableColorTempAndLuxCalculation(bool b) { b_ct_lux_calc = b; }
 
     int16_t integrationCycles() {
-        return 256 - read8(Reg::ATIME);
+        return readCycles(Reg::ATIME);
     }
 
     int16_t integrationCycles(int16_t nCycles) {// 1 - 256
-        atime = cyclesToValue(nCycles);
+        atime = fromCycles(nCycles);
         write8(Reg::ATIME, atime);
-        integration_time = (256 - atime) * INTEGRATION_TIME_MS_MIN;
-        return 256 - atime;
+        integration_time = toCycles(atime) * INTEGRATION_TIME_MS_MIN;
+        return toCycles(atime);
     }
 
     float integrationTime() {
@@ -205,9 +229,13 @@ public:
     float lux() const { return lx; }
     float colorTemperature() const { return color_temp; }
 
-    void interrupt(bool b)
+    bool interrupt() {
+        return enable() & (uint8_t) Mask::ENABLE_AIEN;
+    }
+
+    uint8_t interrupt(bool b)
     {
-        enable(Mask::ENABLE_AIEN, b);
+        return enable(Mask::ENABLE_AIEN, b);
     }
 
     void clearInterrupt()
@@ -217,14 +245,44 @@ public:
         wire->endTransmission();
     }
 
-    static uint8_t cyclesToValue(int16_t nCycles) {
-        // 1 -> 0xFF ... 256 -> 0x00
+    void interruptThresholds(uint16_t low, uint16_t high) {
+        lowInterruptThreshold(low);
+        highInterruptThreshold(high);
+    }
+
+    uint16_t lowInterruptThreshold() {
+        return read16(Reg::AILTL);
+    }
+
+    void lowInterruptThreshold(uint16_t lowThreshold) {
+        write16(Reg::AILTL, lowThreshold);
+    }
+
+    uint16_t highInterruptThreshold() {
+        return read16(Reg::AIHTL);
+    }
+
+    void highInterruptThreshold(uint16_t highThreshold) {
+        write16(Reg::AIHTL, highThreshold);
+    }
+
+    // 1 -> 0xFF ... 256 -> 0x00
+    static uint8_t fromCycles(int16_t nCycles) {
         return max(0, min(255, 256 - nCycles));
+    }
+
+    // 0xFF -> 1 ... 0x00 -> 256
+    static uint16_t toCycles(uint8_t v) {
+        return 256 - (uint16_t) v;
+    }
+
+    uint16_t readCycles(Reg reg) {
+        return toCycles(read8(reg));
     }
 
     float wait() {
         uint8_t wlong = read8(Reg::CONFIG) & 0x02;
-        uint8_t nCycles = 256 - read8(Reg::WTIME);
+        uint8_t nCycles = readCycles(Reg::WTIME);
         return nCycles * (wlong ? 28.8 : 2.4);
     }
 
@@ -237,12 +295,17 @@ public:
         }
         enable(Mask::ENABLE_WEN, true);
         write8(Reg::CONFIG, wlong ? 0x02 : 0x00);
-        write8(Reg::WTIME, cyclesToValue(waitCycles));
+        write8(Reg::WTIME, fromCycles(waitCycles));
         return wait();
     }
 
     uint8_t enable() {
         return read8(Reg::ENABLE);
+    }
+
+    uint8_t enable(uint8_t val) {
+        write8(Reg::ENABLE, val);
+        return val;
     }
 
     uint8_t enable(Mask mask, bool value) {
@@ -252,8 +315,7 @@ public:
         } else {
             val &= ~ (uint8_t) mask;
         }
-        write8(Reg::ENABLE, val);
-        return val;
+        return enable(val);
     }
 
     void write8(uint8_t reg, uint8_t value)
@@ -272,6 +334,10 @@ public:
     {
         write8(lowerReg, (uint8_t) value);
         write8(lowerReg + 1, value >> 8);
+    }
+
+    void write16(Reg lowerReg, uint16_t value) {
+        write16((uint8_t) lowerReg, value);
     }
 
     uint8_t read8(Reg reg)
