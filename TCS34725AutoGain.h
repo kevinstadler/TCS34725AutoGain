@@ -90,7 +90,7 @@ public:
         // there is actually some register persistence
         if (initMode != Mode::Undefined) {
             mode(initMode);
-            interrupt(aien);   // use to detect availability (available())
+            interrupt(true);   // use to detect availability (available())
             persistence(0x00); // every RGBC cycle generates an interrupt
         }
         return true;
@@ -103,7 +103,7 @@ public:
         {
             // TODO does this actually stop us from turning everything on at once?
             delay(3); // 2.4 ms must pass after PON is asserted before an RGBC can be initiated
-            enable(Mask::ENABLE_AEN, rgbc);
+            enable(Mask::ENABLE_AEN, true);
         }
     }
 
@@ -166,21 +166,14 @@ public:
     }
 
     float gain() {
-        return gain_value;
+        return GAIN_VALUES[read8(Reg::CONTROL)];
     }
 
     float gain(Gain g)
     {
         write8(Reg::CONTROL, (uint8_t)g);
-        switch (g)
-        {
-            case Gain::X01: gain_value =  1.f; break;
-            case Gain::X04: gain_value =  4.f; break;
-            case Gain::X16: gain_value = 16.f; break;
-            case Gain::X60: gain_value = 60.f; break;
-            default:        gain_value =  1.f; break;
-        }
-        return gain();
+        gain_value = GAIN_VALUES[(uint8_t)g];
+        return gain_value;
     }
 
     void scale(float s) { scaling = s; }
@@ -193,7 +186,7 @@ public:
     // ams Color Sensors for more details.
     void glassAttenuation(float v) { if (v < 1.f) v = 1.f; glass_attenuation = v; }
 
-    void persistence(uint16_t data) { write8(Reg::PERS, data); }
+    void persistence(uint8_t data) { write8(Reg::PERS, data); }
 
     bool available()
     {
@@ -205,6 +198,100 @@ public:
             clearInterrupt();
         }
         return b;
+    }
+
+    bool available(float timeoutMs) {
+        uint32_t m = millis();
+        while (millis() - m < timeoutMs) {
+            if (available()) {
+                return true;
+            }
+            delay(integration_time / 4); // heuristic
+        }
+        return available();
+    }
+
+    bool singleRead() {
+        // FIXME make sure interrupts are set?
+        rgbc(true);
+        while (!available()) {
+            delay(1); // 1ms
+        }
+        rgbc(false);
+        return true;
+    }
+
+    bool rgbc() {
+        return enable() & (uint8_t) Mask::ENABLE_AEN;
+    }
+
+    uint8_t rgbc(bool b) {
+        return enable(Mask::ENABLE_AEN, b);
+    }
+
+    bool autoGain(int16_t minClearCount = 1000, Gain initGain = Gain::X01) {
+        uint8_t enableState = enable();
+
+        // TAKE 1: minimal cycles, default gain
+        const uint16_t minCycles = ceil(minClearCount / 1024.0 + .5); // heuristic
+        integrationCycles(minCycles);
+        gain(initGain);
+
+        singleRead();
+//        available(INTEGRATION_TIME_MS_MIN * minCycles);
+
+        RawData r = raw();
+        if (r.c >= minClearCount) {
+            return true;
+        }
+
+        // aggressively increase gain to prevent using uneccessarily long integration times,
+        // but without exceeding analog saturation
+
+        uint16_t unitGainCountsPerCycle = max(1.f, r.c / (gain_value * minCycles));
+        // gain limit that avoids analog saturation (don't go over 950 just in case)
+        uint8_t maxGain = min(60, 950 / unitGainCountsPerCycle);
+        uint8_t newGain = 0;
+        for (uint8_t i = 0; i < 4; i++) {
+            if (GAIN_VALUES[3 - i] <= maxGain) {
+                newGain = 3 - i;
+                break;
+            }
+        }
+        // what multiple of long cycle would i need at this gain to hit the minClearCount?
+        // if the minimum count is within reach, only increase gain.
+        uint8_t longCycles = ((r.c * GAIN_VALUES[newGain] / gain_value) >= minClearCount) ? 0 : min(6.0, ceil(minClearCount / (41.7 * GAIN_VALUES[newGain]  * unitGainCountsPerCycle)));
+        gain((Gain) newGain);
+
+        // TAKE 2: minimal cycle and/or all 100ms multiples up to 600ms, with adjusted gain.
+        // ideal loop with actual measurement length multiples of the base cycle of 2.4ms,
+        // each of which is roughly 100ms (i.e. 41.7 cycles): round(1:6 * 41.7)*2.4
+        while (longCycles <= 6) {
+            // calculate next number of cycles
+            uint16_t nCycles = longCycles == 0 ? minCycles : round(41.7 * longCycles);
+
+            //    for (byte i = 0; i < maxGain; i++) {
+              // could we reach the threshold with the current gain and integration time?
+            //      if ((2.4 * nCycles * GAIN_VALUES[i] * r.c) / (integrationTime * gain) >= minClearCount) {
+            //        newGain = i;
+            //        DEBUG_PRINT("New gain: ");
+            //        DEBUG_PRINTLN(GAIN_VALUES[newGain]);
+            //        break;
+            //      }
+            //    }
+            integrationCycles(nCycles);
+//            available(INTEGRATION_TIME_MS_MIN * nCycles);
+            singleRead();
+
+            r = raw();
+            if (r.c >= minClearCount) {
+                break;
+            }
+            longCycles++;
+        }
+        // reinstate previous state?
+        enable(enableState);
+        return r.c >= minClearCount;
     }
 
     Color color() const
@@ -362,6 +449,9 @@ public:
         x |= t;
         return x;
     }
+
+    // these should really be static constexpr but C++ is a pain
+    float GAIN_VALUES[4] = { 1.f, 4.f, 16.f, 60.f };
 
 private:
 
