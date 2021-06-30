@@ -81,25 +81,22 @@ public:
     };
 
 
-    bool attach(WireType& w = Wire, bool pon = true, bool aien = true)
+    bool attach(WireType& w = Wire, Mode initMode = Mode::RGBC)
     {
         wire = &w;
         uint8_t x = read8(Reg::ID);
         if (x != ID_REG_PART_NUMBER) return false;
 
-        power(pon);
-        interrupt(aien);   // use to detect availability (available())
-        persistence(0x00); // every RGBC cycle generates an interrupt
-
+        // there is actually some register persistence
+        if (initMode != Mode::Undefined) {
+            mode(initMode);
+            interrupt(aien);   // use to detect availability (available())
+            persistence(0x00); // every RGBC cycle generates an interrupt
+        }
         return true;
     }
 
     void power(bool b)
-    {
-        enable(Mask::ENABLE_PON, b);
-    }
-
-    void power(bool b, bool rgbc)
     {
         enable(Mask::ENABLE_PON, b);
         if (b)
