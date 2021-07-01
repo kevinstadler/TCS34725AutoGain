@@ -1,4 +1,4 @@
-# `TCS34725AutoGain` [![Build Status](https://github.com/kevinstadler/TCS34725AutoGain/workflows/Arduino%20library%20build/badge.svg)]
+# `TCS34725AutoGain` [![Build Status](https://github.com/kevinstadler/TCS34725AutoGain/workflows/Arduino%20library%20build/badge.svg)](https://github.com/kevinstadler/TCS34725AutoGain/actions)
 
 This is a fork of hideakitai's TCS34725 library, which adds support for:
 
@@ -6,29 +6,66 @@ This is a fork of hideakitai's TCS34725 library, which adds support for:
 * fine-grained control of all sensor modes (busy reading vs single readouts, power saving/wait times)
 * configuration setter methods now double as getters: when called without arguments, methods will read and return their configuration setting based on freshly read information from the device register
 
-### Auto gain
+### Automatic setting of gain and integration time
+
+The following method performs some measurements to determine the best gain and integration time for hitting the desired minimum clear channel count. It returns `true` if such a setting was found, or `false` if the final setting fails to produce the desired count (usually indicating that light conditions are too dark).
 
 ```cpp
-bool autoGain(int16_t minClearCount = 100, Gain initGain = Gain::X01)`
+    bool autoGain(int16_t minClearCount = 100, Gain initGain = Gain::X01);
 ```
 
-### New methods for setting interrupt thresholds, wait times etc.
+After returning from the method the sensor will be set to the lowest gain and integration time that is capable of reliably producing the given minimum count, and a first measurement using these new settings is instantly available by calling `raw()`.
+
+(A minimum clear channel count of 100 is recommended for reliable lux calculation in the [DN40 Lux and CCT Calculation Application Note](https://ams.com/documents/20143/36005/ColorSensors_AN000166_1-00.pdf/d1290c78-4ef1-5b88-bff0-8e80c2f92b6b).)
+
+### Sensor modes
+
+The sensor passes through internal system states depending on settings of the enable register (see pages 7 and 10 of the [data sheet](https://cdn-shop.adafruit.com/datasheets/TCS34725.pdf)). Most libraries directly enter the mode in which the sensor repeatedly takes RGBC measurements as fast as possible
 
 ```cpp
-    uint16_t lowInterruptThreshold()
-    uint16_t highInterruptThreshold()
+    enum class Mode : uint8_t {
+        Undefined, // unknown/undefined/error state
+        Sleep,    // !PON: in sleep state
+        Idle,     //  PON & !AEN: in idle state
+        RGBC,     //  PON &  AEN & !WEN: repeatedly taking RGBC measurements
+        WaitRGBC  //  PON &  AEN &  WEN: taking RGBC measurements with waits in between
+    };
 
-    void interruptThresholds(uint16_t low, uint16_t high)
-    void lowInterruptThreshold(uint16_t lowThreshold)
-    void highInterruptThreshold(uint16_t highThreshold)
+    // get current state
+    Mode mode();
+
+    // set state -- 
+    Mode mode(Mode m);
+```
+
+When entering the `WaitRGBC` mode, the sensor will pause in between reads to save power. The wait time can be controlled using the following methods (see the [TCS34725 Modes Full Demo](examples/TCS34725_Modes_Full_Demo/TCS34725_Modes_Full_Demo.ino) sketch for an example):
+
+```cpp
+    float wait();
+    float wait(float ms); /* between 2.4ms and 256*28.8 = 7372.8ms */
 ```
 
 ```cpp
-    float wait()
-    float wait(float ms) /* between 2.4ms and 256*28.8 = 7372.8ms */
+    bool singleRead();
 ```
 
-`============= original library documentation below =============`
+### New methods for setting interrupt thresholds
+
+See the [TCS34725 Interrupt Thresholds](examples/TCS34725_Interrupt_Thresholds/TCS34725_Interrupt_Thresholds.ino) sketch for an example.
+
+```cpp
+    bool interrupt();
+    uint8_t persistence();
+
+    uint16_t lowInterruptThreshold();
+    uint16_t highInterruptThreshold();
+
+    void interruptThresholds(uint16_t low, uint16_t high);
+    void lowInterruptThreshold(uint16_t lowThreshold);
+    void highInterruptThreshold(uint16_t highThreshold);
+```
+
+`========================== original library documentation below ==========================`
 
 # TCS34725
 
