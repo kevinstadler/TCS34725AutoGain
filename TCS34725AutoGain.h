@@ -21,6 +21,14 @@ class TCS34725_
     static constexpr float INTEGRATION_TIME_MS_MIN {2.4f};
     static constexpr float INTEGRATION_TIME_MS_MAX {INTEGRATION_TIME_MS_MIN * INTEGRATION_CYCLES_MAX};
 
+    // Device specific values (DN40 Table 1 in Appendix I)
+    static constexpr float DF = 310.f;             // Device Factor
+    static constexpr float R_Coef = 0.136f;        //
+    static constexpr float G_Coef = 1.f;           // used in lux computation
+    static constexpr float B_Coef = -0.444f;       //
+    static constexpr float CT_Coef = 3810.f;       // Color Temperature Coefficient
+    static constexpr float CT_Offset = 1391.f;     // Color Temperature Offset
+
 public:
 
     enum class Reg : uint8_t
@@ -62,7 +70,7 @@ public:
         Sleep,    // !PON: in sleep state
         Idle,     //  PON & !AEN: in idle state
         RGBC,     //  PON &  AEN & !WEN: repeatedly taking RGBC measurements
-        RGBCWait  //  PON &  AEN &  WEN: taking RGBC measurements with waits in between
+        WaitRGBC  //  PON &  AEN &  WEN: taking RGBC measurements with waits in between
     };
 
     enum class Gain : uint8_t { X01, X04, X16, X60 };
@@ -113,7 +121,7 @@ public:
         } else if (!(v & (uint8_t) Mask::ENABLE_AEN)) {
             return Mode::Idle;
         } else if (v & (uint8_t) Mask::ENABLE_WEN) {
-            return Mode::RGBCWait;
+            return Mode::WaitRGBC;
         } else {
             return Mode::RGBC;
         }
@@ -133,7 +141,7 @@ public:
                 v &= ~ (uint8_t) Mask::ENABLE_AEN;
             } else {
                 v |= (uint8_t) Mask::ENABLE_AEN;
-                if (m == Mode::RGBCWait) {
+                if (m == Mode::WaitRGBC) {
                     v |= (uint8_t) Mask::ENABLE_WEN;
                 } else {
                     v &= ~ (uint8_t) Mask::ENABLE_WEN;
@@ -166,7 +174,7 @@ public:
     }
 
     float gain() {
-        return GAIN_VALUES[read8(Reg::CONTROL)];
+        return GAIN_VALUES[read8(Reg::CONTROL) & 0x03];
     }
 
     float gain(Gain g)
@@ -190,7 +198,7 @@ public:
 
     bool available()
     {
-        bool b = read8(Reg::STATUS) & (uint8_t)Mask::STATUS_AINT;
+        bool b = interrupted();
         if (b)
         {
             update();
@@ -211,6 +219,10 @@ public:
         return available();
     }
 
+    bool valid() {
+        return read8(Reg::STATUS) & (uint8_t)Mask::STATUS_AVALID;
+    }
+
     bool singleRead() {
         // FIXME make sure interrupts are set?
         rgbc(true);
@@ -229,8 +241,10 @@ public:
         return enable(Mask::ENABLE_AEN, b);
     }
 
-    bool autoGain(int16_t minClearCount = 1000, Gain initGain = Gain::X01) {
+    bool autoGain(int16_t minClearCount = 100, Gain initGain = Gain::X01) {
         uint8_t enableState = enable();
+        // interrupt any ongoing read to be sure we get accurate first data
+        rgbc(false);
 
         // TAKE 1: minimal cycles, default gain
         const uint16_t minCycles = ceil(minClearCount / 1024.0 + .5); // heuristic
@@ -238,10 +252,11 @@ public:
         gain(initGain);
 
         singleRead();
-//        available(INTEGRATION_TIME_MS_MIN * minCycles);
 
         RawData r = raw();
         if (r.c >= minClearCount) {
+            // reinstate initial state
+            enable(enableState);
             return true;
         }
 
@@ -280,7 +295,6 @@ public:
             //      }
             //    }
             integrationCycles(nCycles);
-//            available(INTEGRATION_TIME_MS_MIN * nCycles);
             singleRead();
 
             r = raw();
@@ -289,7 +303,7 @@ public:
             }
             longCycles++;
         }
-        // reinstate previous state?
+        // reinstate initial state
         enable(enableState);
         return r.c >= minClearCount;
     }
@@ -320,6 +334,10 @@ public:
     uint8_t interrupt(bool b)
     {
         return enable(Mask::ENABLE_AIEN, b);
+    }
+
+    bool interrupted() {
+        return read8(Reg::STATUS) & (uint8_t)Mask::STATUS_AINT;
     }
 
     void clearInterrupt()
@@ -465,28 +483,34 @@ private:
             raw_data.raw[i] = wire->read();
     }
 
+    float cpl() {
+        return (integration_time * gain_value) / (glass_attenuation * DF);
+    }
+
+    float maxLux() {
+        return 65000.0 / ( 3 * cpl());
+    }
+
+    // digitization error
+    float luxDER() {
+        return 2.0 / cpl();
+    }
+
     // https://github.com/adafruit/Adafruit_CircuitPython_TCS34725/blob/master/adafruit_tcs34725.py
     void calcTemperatureAndLuxDN40()
     {
-        // Device specific values (DN40 Table 1 in Appendix I)
-        const float GA = glass_attenuation;        // Glass Attenuation Factor
-        static const float DF = 310.f;             // Device Factor
-        static const float R_Coef = 0.136f;        //
-        static const float G_Coef = 1.f;           // used in lux computation
-        static const float B_Coef = -0.444f;       //
-        static const float CT_Coef = 3810.f;       // Color Temperature Coefficient
-        static const float CT_Offset = 1391.f;     // Color Temperatuer Offset
-
         // Analog/Digital saturation (DN40 3.5)
-        float saturation = (256 - atime > 63) ? 65535 : 1024 * (256 - atime);
+        float saturation = (toCycles(atime) > 63) ? 65535 : 1024 * toCycles(atime);
 
         // Ripple saturation (DN40 3.7)
         if (integration_time < 150)
             saturation -= saturation / 4;
 
         // Check for saturation and mark the sample as invalid if true
-        if (raw_data.c >= saturation)
+        if (raw_data.c >= saturation) {
+            lx = color_temp = 0;
             return;
+        }
 
         // IR Rejection (DN40 3.1)
         float sum = raw_data.r + raw_data.g + raw_data.b;
@@ -498,11 +522,10 @@ private:
 
         // Lux Calculation (DN40 3.2)
         float g1 = R_Coef * r2 + G_Coef * g2 + B_Coef * b2;
-        float cpl = (integration_time * gain_value) / (GA * DF);
-        lx = g1 / cpl;
+        lx = max(0.f, g1) / cpl();
 
         // CT Calculations (DN40 3.4)
-        color_temp = CT_Coef * b2 / r2 + CT_Offset;
+        color_temp = (CT_Coef * b2) / r2 + CT_Offset;
     }
 
 
