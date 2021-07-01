@@ -196,6 +196,10 @@ public:
 
     void persistence(uint8_t data) { write8(Reg::PERS, data); }
 
+    uint8_t persistence() {
+        read8(Reg::PERS, data);
+    }
+
     bool available()
     {
         bool b = interrupted();
@@ -224,13 +228,15 @@ public:
     }
 
     bool singleRead() {
-        // FIXME make sure interrupts are set?
-        rgbc(true);
-        while (!available()) {
-            delay(1); // 1ms
+        uint8_t enableState = enable();
+        if (getMode(enableState) != Mode::RGBC) {
+            // FIXME make sure interrupts are set?
+            mode(Mode::RGBC);
         }
-        rgbc(false);
-        return true;
+        bool got_interrupt = available(integration_time);
+        // restore initial state
+        enable(enableState);
+        return got_interrupt;
     }
 
     bool rgbc() {
