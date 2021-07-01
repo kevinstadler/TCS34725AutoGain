@@ -1,3 +1,4 @@
+name: Arduino library build
 on: [push, pull_request]
 jobs:
   lint:

@@ -1,3 +1,35 @@
+# `TCS34725AutoGain` [![Build Status](https://github.com/kevinstadler/TCS34725AutoGain/workflows/Arduino%20library%20build/badge.svg)]
+
+This is a fork of hideakitai's TCS34725 library, which adds support for:
+
+* automatic setting of gain and integration time based on a clear sensor count target
+* fine-grained control of all sensor modes (busy reading vs single readouts, power saving/wait times)
+* configuration setter methods now double as getters: when called without arguments, methods will read and return their configuration setting based on freshly read information from the device register
+
+### Auto gain
+
+```cpp
+bool autoGain(int16_t minClearCount = 100, Gain initGain = Gain::X01)`
+```
+
+### New methods for setting interrupt thresholds, wait times etc.
+
+```cpp
+    uint16_t lowInterruptThreshold()
+    uint16_t highInterruptThreshold()
+
+    void interruptThresholds(uint16_t low, uint16_t high)
+    void lowInterruptThreshold(uint16_t lowThreshold)
+    void highInterruptThreshold(uint16_t highThreshold)
+```
+
+```cpp
+    float wait()
+    float wait(float ms) /* between 2.4ms and 256*28.8 = 7372.8ms */
+```
+
+`============= original library documentation below =============`
+
 # TCS34725
 
 Arduino library for TCS34725 RGB Color Sensor
