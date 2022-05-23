@@ -196,10 +196,6 @@ public:
 
     void persistence(uint8_t data) { write8(Reg::PERS, data); }
 
-    uint8_t persistence() {
-        read8(Reg::PERS, data);
-    }
-
     bool available()
     {
         bool b = interrupted();
