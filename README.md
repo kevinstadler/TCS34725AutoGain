@@ -110,6 +110,8 @@ See the [TCS34725 Interrupt Thresholds](examples/TCS34725_Interrupt_Thresholds/T
     float gain();
 ```
 
+Kudos to [Dennis Gaida](https://github.com/DennisGaida) for reporting a compilation issue.
+
 ```
 
 ============================= original library documentation below =============================

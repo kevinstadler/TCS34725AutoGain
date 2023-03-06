@@ -197,7 +197,7 @@ public:
     void persistence(uint8_t data) { write8(Reg::PERS, data); }
 
     uint8_t persistence() {
-        read8(Reg::PERS, data);
+        return read8(Reg::PERS);
     }
 
     bool available()
